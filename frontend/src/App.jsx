@@ -196,6 +196,7 @@ function App() {
   const [graph, setGraph] = useState(null)
   const [rankings, setRankings] = useState([])
   const [evaluation, setEvaluation] = useState(null)
+  const [realWorldEvaluation, setRealWorldEvaluation] = useState(null)
   const [investigation, setInvestigation] = useState(null)
   const [indicator, setIndicator] = useState('')
   const [selectedNode, setSelectedNode] = useState(null)
@@ -214,7 +215,8 @@ function App() {
         api.get('/graph'),
         api.get('/analytics/risk-ranking'),
         api.get('/analytics/evaluation'),
-        api.get('/analytics/otx-summary')
+        api.get('/analytics/otx-summary'),
+        api.get('/analytics/real-world-evaluation')
       ])
 
       if (results[0].status === 'fulfilled') setSummary(results[0].value.data)
@@ -224,6 +226,7 @@ function App() {
       }
       if (results[3].status === 'fulfilled') setEvaluation(results[3].value.data)
       if (results[4].status === 'fulfilled') setOtxSummary(results[4].value.data)
+      if (results[5]?.status === 'fulfilled') setRealWorldEvaluation(results[5].value.data)
 
       const failed = results.filter(result => result.status === 'rejected')
       if (failed.length) {
@@ -519,6 +522,7 @@ function App() {
               )}
 
               {activePage === 'Evaluation' && (
+                <>
                 <section className="panel evaluation-panel">
                   <div className="panel-heading">
                     <div><h2>Model Evaluation</h2><p>Graph-based model compared with the rule-based baseline.</p></div>
@@ -563,6 +567,110 @@ function App() {
                     </>
                   ) : <p className="empty-state">Evaluation results are not available from the backend.</p>}
                 </section>
+
+                <section className="panel real-world-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <h2>Real-World URL Evaluation</h2>
+                      <p>Independent classification experiment using the ISCX-URL2016 labelled dataset.</p>
+                    </div>
+                    <span className="graph-count">PUBLIC BENCHMARK DATASET</span>
+                  </div>
+
+                  {realWorldEvaluation ? (
+                    <>
+                      <div className="evaluation-source real-world-source">
+                        <span>DATASET</span>
+                        <strong>ISCX-URL2016</strong>
+                        <span>RECORDS AFTER CLEANING</span>
+                        <strong>{realWorldEvaluation.records_after_cleaning?.toLocaleString() ?? '—'}</strong>
+                        <span>TEST RECORDS</span>
+                        <strong>{realWorldEvaluation.testing_records?.toLocaleString() ?? '—'}</strong>
+                        <span>FEATURES</span>
+                        <strong>{realWorldEvaluation.feature_count ?? '—'}</strong>
+                      </div>
+
+                      <h3 className="real-world-subheading">Multiclass classification · five URL categories</h3>
+                      <div className="comparison-grid">
+                        {[
+                          ['Random Forest', realWorldEvaluation.multiclass_results?.random_forest],
+                          ['Decision Tree', realWorldEvaluation.multiclass_results?.decision_tree],
+                          ['Majority Baseline', realWorldEvaluation.multiclass_results?.majority_baseline]
+                        ].map(([name, model]) => (
+                          <div className="comparison-card" key={name}>
+                            <h3>{name}</h3>
+                            {[
+                              ['Accuracy', model?.accuracy],
+                              ['Macro F1', model?.macro_f1],
+                              ['Balanced accuracy', model?.balanced_accuracy]
+                            ].map(([label, value]) => (
+                              <div className="comparison-metric" key={label}>
+                                <span>{label}</span>
+                                <strong>{value == null ? '—' : `${(value * 100).toFixed(2)}%`}</strong>
+                                <div className="progress-track">
+                                  <div style={{ width: `${Math.min(100, (value || 0) * 100)}%` }} />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+
+                      <h3 className="real-world-subheading">Binary classification · benign versus malicious</h3>
+                      <div className="metric-grid real-world-metrics">
+                        {[
+                          ['Accuracy', realWorldEvaluation.binary_results?.random_forest?.accuracy],
+                          ['Precision', realWorldEvaluation.binary_results?.random_forest?.precision],
+                          ['Recall', realWorldEvaluation.binary_results?.random_forest?.recall],
+                          ['F1-score', realWorldEvaluation.binary_results?.random_forest?.f1],
+                          ['Specificity', realWorldEvaluation.binary_results?.random_forest?.specificity],
+                          ['ROC-AUC', realWorldEvaluation.binary_results?.random_forest?.roc_auc]
+                        ].map(([label, value]) => (
+                          <div className="real-world-metric" key={label}>
+                            <span>{label}</span>
+                            <strong>{value == null ? '—' : `${(value * 100).toFixed(2)}%`}</strong>
+                          </div>
+                        ))}
+                      </div>
+
+                      <h3 className="real-world-subheading">Top Random Forest features</h3>
+                      <div className="feature-section">
+                        {(realWorldEvaluation.top_random_forest_features || []).slice(0, 10).map(item => (
+                          <div className="entity-row" key={item.feature}>
+                            <div className="entity-row-top">
+                              <span>{item.feature}</span>
+                              <strong>{(item.importance * 100).toFixed(2)}%</strong>
+                            </div>
+                            <div className="progress-track">
+                              <div style={{ width: `${item.importance * 100}%` }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="real-world-notice">
+                        <strong>Methodology and limitations</strong>
+                        <p>
+                          This experiment evaluates classification using engineered URL features from a historical,
+                          labelled dataset. It does not directly measure the accuracy of the Neo4j graph-based
+                          investigation system. The dataset does not provide original URL or domain identifiers.
+                          Results use a stratified random train/test split and should not be interpreted as current
+                          threat prevalence or guaranteed performance on new data.
+                        </p>
+                        <p>
+                          Original records: {realWorldEvaluation.original_records?.toLocaleString() ?? '—'}.
+                          Training records: {realWorldEvaluation.training_records?.toLocaleString() ?? '—'}.
+                          Repeated feature records removed: {realWorldEvaluation.duplicate_feature_records_removed?.toLocaleString() ?? '—'}.
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="empty-state">
+                      Real-world evaluation results are unavailable. Run the ISCX-URL2016 evaluation script and restart the backend.
+                    </p>
+                  )}
+                </section>
+                </>
               )}
             </>
           )}

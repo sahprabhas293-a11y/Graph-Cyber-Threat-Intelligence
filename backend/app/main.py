@@ -408,3 +408,29 @@ def verified_threat_summary():
             status_code=500,
             detail="Could not retrieve source-backed threat information."
         )
+
+
+@app.get("/analytics/real-world-evaluation")
+def real_world_evaluation():
+    import json
+    from pathlib import Path
+
+    result_path = (
+        Path(__file__).resolve().parents[2]
+        / "datasets/real_world/processed/iscx_url2016_evaluation.json"
+    )
+
+    if not result_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Real-world evaluation results are not available. Run the ISCX-URL2016 evaluation first."
+        )
+
+    try:
+        with result_path.open("r", encoding="utf-8") as result_file:
+            return json.load(result_file)
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=500,
+            detail="Could not read the real-world evaluation results."
+        )
