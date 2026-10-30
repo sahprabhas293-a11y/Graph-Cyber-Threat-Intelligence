@@ -13,6 +13,8 @@ from app.graph_model import (
 )
 
 from app.urlhaus import collect_urlhaus_intelligence
+from app.graph_analysis import get_graph_analysis, investigate_indicator, get_graph_topology
+
 
 
 app = FastAPI(
@@ -234,4 +236,62 @@ def risk_ranking():
         raise HTTPException(
             status_code=500,
             detail="Could not retrieve risk rankings."
+        )
+
+
+@app.get("/analytics/graph-analysis")
+def graph_analysis():
+    try:
+        return get_graph_analysis()
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not perform graph analysis."
+        )
+
+
+@app.get("/investigate")
+def investigate(
+    indicator: str = Query(min_length=1, max_length=2000),
+    hops: int = Query(default=2, ge=1, le=3)
+):
+    try:
+        return investigate_indicator(indicator, hops)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=str(error)
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not investigate the supplied indicator."
+        )
+
+
+@app.get("/analytics/evaluation")
+def evaluation():
+    try:
+        from app.evaluation import run_evaluation
+        return run_evaluation()
+    except (ValueError, FileNotFoundError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not run the evaluation benchmark."
+        )
+
+
+@app.get("/analytics/graph-topology")
+def graph_topology():
+    try:
+        return get_graph_topology()
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not perform graph topology analysis."
         )

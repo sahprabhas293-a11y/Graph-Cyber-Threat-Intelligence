@@ -4,3 +4,39 @@ __pycache__/
 *.pyc
 .DS_Store
 **/__pycache__/
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+
+# Frontend build files
+dist/
+**/dist/
+
+# Environment configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and cache
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# macOS files
+.DS_Store
+
+# IDE files
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Old project archive
+CYBERGRAPH_Project.zip
+
+# Root-level Node dependencies
+/node_modules/
