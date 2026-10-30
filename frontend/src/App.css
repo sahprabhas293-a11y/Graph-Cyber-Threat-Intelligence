@@ -773,3 +773,149 @@ tbody tr:hover { background: #142237; }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* Dual-view threat graph explorer */
+.graph-explorer {
+  display: grid;
+  gap: 13px;
+  margin-bottom: 14px;
+}
+
+.graph-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.graph-mode-button,
+.graph-cluster-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  color: #9eb0c6;
+  background: #101d2d;
+  border: 1px solid #293d54;
+  border-radius: 7px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, color .2s;
+}
+
+.graph-mode-button:hover,
+.graph-cluster-button:hover:not(:disabled) {
+  color: #e5f5ff;
+  border-color: #328d91;
+}
+
+.graph-mode-button.active {
+  color: #75e2d3;
+  background: #123238;
+  border-color: #258c87;
+}
+
+.graph-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 210px) auto;
+  gap: 10px;
+}
+
+.graph-filter-bar input,
+.graph-filter-bar select {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  color: #dce8f5;
+  background: #0b1422;
+  border: 1px solid #293d54;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.graph-filter-bar input::placeholder {
+  color: #71849a;
+}
+
+.graph-cluster-button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.graph-result-summary {
+  color: #8196ad;
+  font-size: 10px;
+  letter-spacing: .2px;
+}
+
+@media (max-width: 760px) {
+  .graph-filter-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-mode-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .graph-mode-button {
+    padding: 9px 7px;
+    font-size: 10px;
+  }
+}
+
+.graph-filter-bar {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 190px auto !important;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.graph-filter-bar input[type="search"] {
+  display: block !important;
+  width: 100% !important;
+  min-width: 220px;
+  min-height: 42px;
+  padding: 11px 14px !important;
+  color: #e5edf7 !important;
+  background: #0b1422 !important;
+  border: 1px solid #328d91 !important;
+  border-radius: 8px;
+  outline: none;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  font-size: 12px;
+}
+
+.graph-filter-bar input[type="search"]:focus {
+  border-color: #5eead4 !important;
+  box-shadow: 0 0 0 2px rgba(94, 234, 212, .12);
+}
+
+.graph-filter-bar input[type="search"]::placeholder {
+  color: #8196ad !important;
+  opacity: 1;
+}
+
+.graph-filter-bar select {
+  min-height: 42px;
+  width: 100%;
+}
+
+.graph-cluster-button {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+@media (max-width: 850px) {
+  .graph-filter-bar {
+    grid-template-columns: 1fr !important;
+  }
+
+  .graph-filter-bar input[type="search"] {
+    min-width: 0;
+  }
+}

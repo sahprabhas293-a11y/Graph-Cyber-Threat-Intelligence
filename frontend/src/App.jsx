@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import CytoscapeComponent from 'react-cytoscapejs'
 import {
@@ -194,17 +194,97 @@ function App() {
   const [summary, setSummary] = useState(null)
   const [otxSummary, setOtxSummary] = useState(null)
   const [graph, setGraph] = useState(null)
+  const [graphLoading, setGraphLoading] = useState(false)
+  const [graphError, setGraphError] = useState('')
+  const [graphRetry, setGraphRetry] = useState(0)
+  const graphLoadStarted = useRef(false)
+  const cyRef = useRef(null)
   const [rankings, setRankings] = useState([])
   const [evaluation, setEvaluation] = useState(null)
   const [realWorldEvaluation, setRealWorldEvaluation] = useState(null)
   const [investigation, setInvestigation] = useState(null)
   const [indicator, setIndicator] = useState('')
   const [selectedNode, setSelectedNode] = useState(null)
+  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [graphView, setGraphView] = useState('complete')
+  const [graphTypeFilter, setGraphTypeFilter] = useState('all')
+  const [graphSearch, setGraphSearch] = useState('')
+  const [clusterOnly, setClusterOnly] = useState(false)
+  const [clusterMessage, setClusterMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState('')
 
   const elements = useMemo(() => makeGraphElements(graph), [graph])
+
+  const graphLayout = useMemo(() => ({
+    name: 'cose',
+    animate: false,
+    padding: 50,
+    nodeRepulsion: 9000,
+    idealEdgeLength: 90,
+    nodeOverlap: 12,
+    numIter: 180,
+    randomize: true
+  }), [])
+
+  const displayedElements = useMemo(() => {
+    if (graphView === 'complete') return elements
+
+    const nodes = elements.filter(item => !item.data.target)
+    const edges = elements.filter(item => item.data.target)
+    const query = graphSearch.trim().toLowerCase()
+
+    if (clusterOnly && selectedNodeId) {
+      const visibleIds = new Set([selectedNodeId])
+
+      for (let depth = 0; depth < 2; depth++) {
+        for (const edge of edges) {
+          if (visibleIds.has(edge.data.source)) visibleIds.add(edge.data.target)
+          if (visibleIds.has(edge.data.target)) visibleIds.add(edge.data.source)
+        }
+      }
+
+      return elements.filter(item =>
+        item.data.target
+          ? visibleIds.has(item.data.source) && visibleIds.has(item.data.target)
+          : visibleIds.has(item.data.id)
+      )
+    }
+
+    const matchingNodes = nodes.filter(item => {
+      const typeMatches =
+        graphTypeFilter === 'all' || item.data.type === graphTypeFilter
+
+      const searchMatches =
+        !query ||
+        String(item.data.label || '').toLowerCase().includes(query) ||
+        String(item.data.type || '').toLowerCase().includes(query) ||
+        JSON.stringify(item.data.properties || {}).toLowerCase().includes(query)
+
+      return typeMatches && searchMatches
+    })
+
+    const visibleIds = new Set(matchingNodes.map(item => item.data.id))
+
+    for (const edge of edges) {
+      if (visibleIds.has(edge.data.source)) visibleIds.add(edge.data.target)
+      if (visibleIds.has(edge.data.target)) visibleIds.add(edge.data.source)
+    }
+
+    return elements.filter(item =>
+      item.data.target
+        ? visibleIds.has(item.data.source) && visibleIds.has(item.data.target)
+        : visibleIds.has(item.data.id)
+    )
+  }, [elements, graphView, graphTypeFilter, graphSearch, clusterOnly, selectedNodeId])
+
+
+  useEffect(() => {
+    if (activePage === 'Threat Graph' && cyRef.current) {
+      cyRef.current.resize()
+    }
+  }, [activePage])
 
   useEffect(() => {
     async function loadDashboard() {
@@ -212,7 +292,6 @@ function App() {
       setError('')
       const results = await Promise.allSettled([
         api.get('/analytics/summary'),
-        api.get('/graph'),
         api.get('/analytics/risk-ranking'),
         api.get('/analytics/evaluation'),
         api.get('/analytics/otx-summary'),
@@ -220,13 +299,12 @@ function App() {
       ])
 
       if (results[0].status === 'fulfilled') setSummary(results[0].value.data)
-      if (results[1].status === 'fulfilled') setGraph(results[1].value.data)
-      if (results[2].status === 'fulfilled') {
-        setRankings(results[2].value.data.risk_rankings || [])
+      if (results[1].status === 'fulfilled') {
+        setRankings(results[1].value.data.risk_rankings || [])
       }
-      if (results[3].status === 'fulfilled') setEvaluation(results[3].value.data)
-      if (results[4].status === 'fulfilled') setOtxSummary(results[4].value.data)
-      if (results[5]?.status === 'fulfilled') setRealWorldEvaluation(results[5].value.data)
+      if (results[2].status === 'fulfilled') setEvaluation(results[2].value.data)
+      if (results[3].status === 'fulfilled') setOtxSummary(results[3].value.data)
+      if (results[4].status === 'fulfilled') setRealWorldEvaluation(results[4].value.data)
 
       const failed = results.filter(result => result.status === 'rejected')
       if (failed.length) {
@@ -237,6 +315,32 @@ function App() {
 
     loadDashboard()
   }, [])
+
+  useEffect(() => {
+    if (activePage !== 'Threat Graph' || graph !== null || graphLoadStarted.current) return
+
+    graphLoadStarted.current = true
+
+    async function loadGraph() {
+      setGraphLoading(true)
+      setGraphError('')
+
+      try {
+        const response = await api.get('/graph')
+        setGraph(response.data)
+      } catch (err) {
+        setGraphError(
+          err.response?.data?.detail ||
+          'The threat graph could not be loaded. Check that the backend and Neo4j are running.'
+        )
+        graphLoadStarted.current = false
+      } finally {
+        setGraphLoading(false)
+      }
+    }
+
+    loadGraph()
+  }, [activePage, graph, graphRetry])
 
   async function runInvestigation(event) {
     event.preventDefault()
@@ -375,16 +479,22 @@ function App() {
                         <button className="text-button" onClick={() => navigate('Threat Graph')}>Explore graph <span>→</span></button>
                       </div>
                       <div className="mini-graph">
-                        <CytoscapeComponent
-                          elements={elements}
-                          stylesheet={graphStyle}
-                          layout={{ name: 'cose', animate: false, padding: 30, nodeRepulsion: 14000, idealEdgeLength: 120, nodeOverlap: 25 }}
-                          style={{ width: '100%', height: '320px' }}
-                          cy={cy => {
-                            cy.off('tap', 'node')
-                            cy.on('tap', 'node', event => setSelectedNode(event.target.data()))
+                        <div
+                          className="graph-preview-placeholder"
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '12px',
+                            height: '320px',
+                            textAlign: 'center'
                           }}
-                        />
+                        >
+                          <Network size={34} />
+                          <strong>Interactive graph loads when opened</strong>
+                          <span>Open Threat Graph to explore all recorded entities and relationships.</span>
+                        </div>
                       </div>
                       <div className="graph-legend">
                         <span><i className="legend-dot domain" /> Domains</span>
@@ -422,23 +532,146 @@ function App() {
                 </>
               )}
 
-              {activePage === 'Threat Graph' && (
-                <section className="panel full-graph-panel">
+              {(
+                <section
+                  className="panel full-graph-panel"
+                  style={{ display: activePage === 'Threat Graph' ? 'block' : 'none' }}
+                >
                   <div className="panel-heading">
                     <div><h2>Interactive Relationship Map</h2><p>Select a node to inspect its properties. Drag, zoom, and pan to explore.</p></div>
-                    <span className="graph-count">{elements.filter(item => item.data.source).length} connections</span>
+                    <span className="graph-count">
+                      {graphLoading ? 'LOADING GRAPH' : `${displayedElements.filter(item => item.data.target).length} connections`}
+                    </span>
+                  </div>
+                  <div className="graph-explorer">
+                    <div className="graph-mode-tabs">
+                      <button
+                        type="button"
+                        className={graphView === 'complete' ? 'graph-mode-button active' : 'graph-mode-button'}
+                        onClick={() => {
+                          setGraphView('complete')
+                          setClusterOnly(false)
+                        }}
+                      >
+                        <Network size={15} /> Complete Network
+                      </button>
+                      <button
+                        type="button"
+                        className={graphView === 'explore' ? 'graph-mode-button active' : 'graph-mode-button'}
+                        onClick={() => {
+                          setGraphView('explore')
+                          setClusterOnly(false)
+                        }}
+                      >
+                        <Search size={15} /> Explore Connections
+                      </button>
+                    </div>
+
+                    {graphView === 'explore' && (
+                      <div className="graph-filter-bar">
+                        <input
+                          type="search"
+                          value={graphSearch}
+                          onChange={event => {
+                            setGraphSearch(event.target.value)
+                            setClusterOnly(false)
+                          }}
+                          onKeyDown={event => {
+                            if (event.key === 'Escape') {
+                              setGraphSearch('')
+                              setClusterOnly(false)
+                            }
+                          }}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="Search a domain, IP, URL, malware, or threat actor..."
+                          aria-label="Search graph entities"
+                        />
+                        <select
+                          value={graphTypeFilter}
+                          onChange={event => {
+                            setGraphTypeFilter(event.target.value)
+                            setClusterOnly(false)
+                          }}
+                          aria-label="Filter graph by entity type"
+                        >
+                          <option value="all">All entity types</option>
+                          <option value="Domain">Domains</option>
+                          <option value="IP">IP addresses</option>
+                          <option value="MaliciousURL">Malicious URLs</option>
+                          <option value="Malware">Malware</option>
+                          <option value="ThreatActor">Threat actors</option>
+                          <option value="ThreatPulse">OTX threat pulses</option>
+                          <option value="ThreatTag">Threat tags</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="graph-cluster-button"
+                          onClick={() => {
+                            if (!selectedNodeId) {
+                              setClusterMessage('Select a node in the graph first, then explore its connected cluster.')
+                              return
+                            }
+                            setClusterMessage('')
+                            setClusterOnly(value => !value)
+                          }}
+                        >
+                          {clusterOnly ? 'Show filtered results' : 'Explore selected cluster'}
+                        </button>
+                      </div>
+                    )}
+                    {clusterMessage && (
+                      <p className="graph-result-summary">{clusterMessage}</p>
+                    )}
+
+                    <div className="graph-result-summary">
+                      Showing {displayedElements.filter(item => !item.data.target).length.toLocaleString()} entities
+                      and {displayedElements.filter(item => item.data.target).length.toLocaleString()} relationships
+                      {clusterOnly ? ' · Two-hop connected cluster' : graphView === 'complete' ? ' · Complete network' : ' · Filtered exploration'}
+                    </div>
                   </div>
                   <div className="full-graph">
-                    <CytoscapeComponent
-                      elements={elements}
-                      stylesheet={graphStyle}
-                      layout={{ name: 'cose', animate: true, animationDuration: 500, padding: 50, nodeRepulsion: 16000, idealEdgeLength: 140, nodeOverlap: 30 }}
-                      style={{ width: '100%', height: '600px' }}
-                      cy={cy => {
-                        cy.off('tap', 'node')
-                        cy.on('tap', 'node', event => setSelectedNode(event.target.data()))
-                      }}
-                    />
+                    {graphLoading ? (
+                      <div className="loading-state">
+                        <LoaderCircle className="spin" size={28} /> Loading graph data...
+                      </div>
+                    ) : graphError ? (
+                      <div className="error-banner">
+                        <AlertTriangle size={17} />
+                        {graphError}
+                        <button
+                          className="text-button"
+                          onClick={() => {
+                            graphLoadStarted.current = false
+                            setGraphError('')
+                            setGraphRetry(value => value + 1)
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : graph ? (
+                      <CytoscapeComponent
+                        elements={displayedElements}
+                        stylesheet={graphStyle}
+                        layout={graphLayout}
+                        hideEdgesOnViewport
+                        textureOnViewport
+                        motionBlur
+                        style={{ width: '100%', height: '600px' }}
+                        cy={cy => {
+                          cy.off('tap', 'node')
+                          cy.on('tap', 'node', event => {
+                            const node = event.target
+                            setSelectedNode(node.data())
+                            setSelectedNodeId(node.id())
+                            setClusterMessage('')
+                          })
+                        }}
+                      />
+                    ) : (
+                      <div className="empty-state">No graph data is available.</div>
+                    )}
                   </div>
                   <div className="graph-legend">
                     <span><i className="legend-dot domain" /> Domains</span>
@@ -449,7 +682,12 @@ function App() {
                   </div>
                   {selectedNode && (
                     <div className="detail-panel">
-                      <button className="close-detail" onClick={() => setSelectedNode(null)}><X size={17} /></button>
+                      <button className="close-detail" onClick={() => {
+                        setSelectedNode(null)
+                        setSelectedNodeId('')
+                        setClusterOnly(false)
+                        setClusterMessage('')
+                      }}><X size={17} /></button>
                       <span className="eyebrow">SELECTED ENTITY · {selectedNode.type}</span>
                       <h3>{selectedNode.label}</h3>
                       <p>Source: {selectedNode.source}</p>
