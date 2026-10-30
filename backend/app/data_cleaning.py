@@ -11,8 +11,8 @@ def normalize_domain(identifier: str) -> str:
 
     try:
         value = value.encode("idna").decode("ascii").lower()
-    except UnicodeError:
-        raise ValueError("Invalid domain name.")
+    except UnicodeError as error:
+        raise ValueError("Invalid domain name.") from error
 
     if len(value) > 253:
         raise ValueError("Domain name is too long.")
@@ -23,10 +23,7 @@ def normalize_domain(identifier: str) -> str:
         if (
             not label
             or len(label) > 63
-            or not re.fullmatch(
-                r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",
-                label
-            )
+            or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
         ):
             raise ValueError("Invalid domain name.")
 
@@ -41,8 +38,8 @@ def normalize_ip(identifier: str) -> str:
 
     try:
         return str(ipaddress.ip_address(value))
-    except ValueError:
-        raise ValueError("Invalid IP address.")
+    except ValueError as error:
+        raise ValueError("Invalid IP address.") from error
 
 
 def normalize_url(identifier: str) -> str:
@@ -51,42 +48,53 @@ def normalize_url(identifier: str) -> str:
     if not value:
         raise ValueError("URL cannot be empty.")
 
-    parsed = urlsplit(value)
-
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("A valid HTTP or HTTPS URL is required.")
-
-    if parsed.username or parsed.password:
-        raise ValueError("URLs containing credentials are not supported.")
-
     try:
+        parsed = urlsplit(value)
+
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise ValueError("Only HTTP and HTTPS URLs are supported.")
+
+        if not parsed.hostname:
+            raise ValueError("URL must contain a hostname.")
+
+        if parsed.username or parsed.password:
+            raise ValueError("URLs containing credentials are not supported.")
+
         host = parsed.hostname
+
         try:
             host = normalize_ip(host)
         except ValueError:
             host = normalize_domain(host)
 
         port = parsed.port
+
+        if ":" in host:
+            host = f"[{host}]"
+
+        netloc = host
+
+        if port and not (
+            (parsed.scheme.lower() == "http" and port == 80)
+            or (parsed.scheme.lower() == "https" and port == 443)
+        ):
+            netloc = f"{host}:{port}"
+
+        return urlunsplit((
+            parsed.scheme.lower(),
+            netloc,
+            parsed.path or "/",
+            parsed.query,
+            parsed.fragment
+        ))
+
     except ValueError as error:
-        raise ValueError("Invalid URL host or port.") from error
-
-    if ":" in host:
-        host = f"[{host}]"
-
-    netloc = host
-    if port:
-        netloc = f"{netloc}:{port}"
-
-    return urlunsplit((
-        parsed.scheme.lower(),
-        netloc,
-        parsed.path or "/",
-        parsed.query,
-        parsed.fragment
-    ))
+        raise ValueError("Invalid URL, hostname, or port.") from error
 
 
 def normalize_indicator(entity_type: str, identifier: str) -> str:
+    entity_type = (entity_type or "").strip().lower()
+
     if entity_type == "domain":
         return normalize_domain(identifier)
 

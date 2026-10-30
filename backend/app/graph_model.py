@@ -1,4 +1,5 @@
 from app.database import driver, DATABASE
+from app.data_cleaning import normalize_indicator
 
 
 def create_graph_constraints():
@@ -33,6 +34,7 @@ def create_graph_constraints():
 
 
 def create_entity(entity_type, identifier, source, confidence, description):
+    identifier = normalize_indicator(entity_type, identifier)
     entity_queries = {
         "domain": """
             MERGE (n:Domain {value: $identifier})
@@ -90,12 +92,21 @@ def create_relationship(
     source,
     confidence
 ):
+    if relationship_type == "ATTRIBUTED_TO":
+        raise ValueError(
+            "Direct attribution is disabled. Use a source-reported "
+            "relationship with traceable evidence instead."
+        )
+
     relationship_queries = {
         ("domain", "RESOLVES_TO", "ip"): """
             MATCH (a:Domain {value: $source_id})
             MATCH (b:IP {value: $target_id})
             MERGE (a)-[r:RESOLVES_TO]->(b)
-            SET r.evidence = $evidence,
+            ON CREATE SET r.created_at = datetime()
+            SET r.updated_at = datetime(),
+                r.observed_at = datetime(),
+                r.evidence = $evidence,
                 r.source = $source,
                 r.confidence = $confidence
             RETURN type(r) AS relationship
@@ -104,20 +115,14 @@ def create_relationship(
             MATCH (a:Malware {name: $source_id})
             MATCH (b:Domain {value: $target_id})
             MERGE (a)-[r:DISTRIBUTES]->(b)
-            SET r.evidence = $evidence,
+            ON CREATE SET r.created_at = datetime()
+            SET r.updated_at = datetime(),
+                r.observed_at = datetime(),
+                r.evidence = $evidence,
                 r.source = $source,
                 r.confidence = $confidence
             RETURN type(r) AS relationship
         """,
-        ("malware", "ATTRIBUTED_TO", "threat_actor"): """
-            MATCH (a:Malware {name: $source_id})
-            MATCH (b:ThreatActor {name: $target_id})
-            MERGE (a)-[r:ATTRIBUTED_TO]->(b)
-            SET r.evidence = $evidence,
-                r.source = $source,
-                r.confidence = $confidence
-            RETURN type(r) AS relationship
-        """
     }
 
     key = (source_type, relationship_type, target_type)
@@ -144,12 +149,12 @@ def create_relationship(
 
         return record["relationship"]
 
-
 def get_graph():
     with driver.session(database=DATABASE) as session:
         nodes_result = session.run(
             "MATCH (n) RETURN collect(n) AS nodes"
         )
+
         nodes = [
             {
                 "labels": list(node.labels),
@@ -171,19 +176,39 @@ def get_graph():
             """
         )
 
-        relationships = [
-            {
+        relationships = []
+
+        for record in relationships_result:
+            properties = record["relationship_properties"]
+
+            relationships.append({
                 "source_labels": record["source_labels"],
                 "source": record["source_node"],
                 "relationship": record["relationship"],
-                "evidence": record["relationship_properties"].get("evidence"),
-                "source_information": record["relationship_properties"].get("source"),
-                "confidence": record["relationship_properties"].get("confidence"),
+                "evidence": properties.get("evidence"),
+                "source_information": properties.get("source"),
+                "source_url": properties.get("source_url"),
+                "source_stix_id": properties.get("mitre_stix_id"),
+                "association_type": properties.get("association_type") or (
+                    "legacy_unverified"
+                    if record["relationship"] == "ATTRIBUTED_TO"
+                    else None
+                ),
+                "verification_scope": properties.get("verification_scope"),
+                "confidence": properties.get("confidence"),
+                "created_at": str(properties["created_at"])
+                    if properties.get("created_at") is not None else None,
+                "updated_at": str(properties["updated_at"])
+                    if properties.get("updated_at") is not None else None,
+                "observed_at": str(properties["observed_at"])
+                    if properties.get("observed_at") is not None else None,
+                "timestamp_backfilled_at": str(properties["timestamp_backfilled_at"])
+                    if properties.get("timestamp_backfilled_at") is not None else None,
+                "timestamp_status": properties.get("timestamp_status"),
+                "timestamp_note": properties.get("timestamp_note"),
                 "target_labels": record["target_labels"],
                 "target": record["target_node"]
-            }
-            for record in relationships_result
-        ]
+            })
 
     return {
         "total_entities": len(nodes),

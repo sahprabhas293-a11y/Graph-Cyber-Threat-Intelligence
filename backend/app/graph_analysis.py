@@ -1,5 +1,6 @@
 import networkx as nx
 import json
+from time import perf_counter
 from app.graph_algorithms import analyze_graph_topology
 
 from app.database import driver, DATABASE
@@ -164,108 +165,213 @@ def get_graph_analysis():
     }
 
 
+
 def investigate_indicator(indicator: str, hops: int = 2):
+    started = perf_counter()
+
     if not indicator or not indicator.strip():
         raise ValueError("An indicator must be provided.")
 
     if hops < 1 or hops > 3:
         raise ValueError("Hops must be between 1 and 3.")
 
-    analysis = get_graph_analysis()
+    search_value = indicator.strip().casefold()
+    path_limit = 2000
 
-    nodes_by_key = {}
-    relationships = []
-
-    for community in analysis.get("communities", []):
-        for node in community.get("members", []):
-            key = (
-                node["entity_type"],
-                node["identifier"]
+    query = f"""
+        MATCH (start)
+        WHERE toLower(
+            coalesce(
+                toString(start.value),
+                toString(start.name),
+                ''
             )
-            nodes_by_key[key] = node
+        ) = $indicator
+        MATCH path = (start)-[*0..{hops}]-(neighbor)
+        RETURN path
+        LIMIT {path_limit + 1}
+    """
 
-    for relationship in analysis.get("relationships", []):
-        source_key = (
-            relationship["source_type"],
-            relationship["source"]
-        )
-        target_key = (
-            relationship["target_type"],
-            relationship["target"]
+    nodes_by_id = {}
+    relationships_by_id = {}
+    paths_examined = 0
+
+    with driver.session(database=DATABASE) as session:
+        records = list(
+            session.run(query, indicator=search_value)
         )
 
-        relationships.append({
-            **relationship,
-            "_source_key": source_key,
-            "_target_key": target_key
+    traversal_truncated = len(records) > path_limit
+    records = records[:path_limit]
+    paths_examined = len(records)
+
+    for record in records:
+        path = record["path"]
+
+        for node in path.nodes:
+            node_id = node.element_id
+
+            if node_id not in nodes_by_id:
+                labels = list(node.labels)
+                properties = dict(node)
+
+                entity_type = labels[0] if labels else "Unknown"
+                identifier = (
+                    properties.get("value")
+                    or properties.get("name")
+                    or node_id
+                )
+
+                nodes_by_id[node_id] = {
+                    "entity_type": entity_type,
+                    "identifier": str(identifier),
+                    "labels": labels,
+                    "properties": properties
+                }
+
+        for relationship in path.relationships:
+            relationship_id = relationship.element_id
+
+            if relationship_id not in relationships_by_id:
+                relationships_by_id[relationship_id] = relationship
+
+    relationship_results = []
+
+    for relationship in relationships_by_id.values():
+        source_id = relationship.start_node.element_id
+        target_id = relationship.end_node.element_id
+
+        source_node = nodes_by_id[source_id]
+        target_node = nodes_by_id[target_id]
+
+        relationship_type = relationship.type
+
+        if relationship_type == "SHARES_TAG":
+            classification = "analytical_association"
+        elif relationship_type == "HOSTED_ON":
+            classification = "observed_host_association"
+        else:
+            classification = "recorded_relationship"
+
+        relationship_results.append({
+            "source": source_node["identifier"],
+            "source_type": source_node["entity_type"],
+            "target": target_node["identifier"],
+            "target_type": target_node["entity_type"],
+            "relationship_type": relationship_type,
+            "classification": classification,
+            "evidence": dict(relationship)
         })
 
-    search_value = indicator.strip().casefold()
+    relationship_results.sort(
+        key=lambda item: (
+            item["source_type"],
+            item["source"],
+            item["relationship_type"],
+            item["target_type"],
+            item["target"]
+        )
+    )
 
-    selected = {
-        key
-        for key, node in nodes_by_key.items()
-        if node["identifier"].casefold() == search_value
+    node_results = sorted(
+        nodes_by_id.values(),
+        key=lambda item: (
+            item["entity_type"],
+            item["identifier"]
+        )
+    )
+
+    elapsed_ms = round(
+        (perf_counter() - started) * 1000, 3
+    )
+
+    traversal_metrics = {
+        "elapsed_ms": elapsed_ms,
+        "traversed_nodes": len(node_results),
+        "traversed_relationships": len(relationship_results),
+        "paths_examined": paths_examined,
+        "requested_hops": hops,
+        "path_limit": path_limit,
+        "traversal_truncated": traversal_truncated,
+        "query_scope": "Direct bounded Neo4j traversal"
     }
 
-    if not selected:
+    if not node_results:
         return {
             "found": False,
             "indicator": indicator,
             "hops": hops,
             "nodes": [],
             "relationships": [],
+            "traversal_metrics": traversal_metrics,
             "message": "No matching indicator was found."
         }
-
-    visited = set(selected)
-    frontier = set(selected)
-
-    for _ in range(hops):
-        next_frontier = set()
-
-        for relationship in relationships:
-            source = relationship["_source_key"]
-            target = relationship["_target_key"]
-
-            if source in frontier and target not in visited:
-                next_frontier.add(target)
-
-            if target in frontier and source not in visited:
-                next_frontier.add(source)
-
-        visited.update(next_frontier)
-        frontier = next_frontier
-
-        if not frontier:
-            break
-
-    selected_relationships = [
-        {
-            key: value
-            for key, value in relationship.items()
-            if not key.startswith("_")
-        }
-        for relationship in relationships
-        if (
-            relationship["_source_key"] in visited
-            and relationship["_target_key"] in visited
-        )
-    ]
 
     return {
         "found": True,
         "indicator": indicator,
         "hops": hops,
-        "nodes": [
-            nodes_by_key[key]
-            for key in sorted(visited)
-        ],
-        "relationships": selected_relationships,
+        "nodes": node_results,
+        "relationships": relationship_results,
+        "traversal_metrics": traversal_metrics,
         "evidence_note": (
             "Observed source records and analytical associations are "
             "labelled separately. Shared infrastructure or tags do not "
             "establish common attacker identity."
+        )
+    }
+
+
+def benchmark_investigation(
+    indicator: str,
+    hops: int = 2,
+    repetitions: int = 5
+):
+    import statistics
+
+    if repetitions < 1 or repetitions > 20:
+        raise ValueError(
+            "Repetitions must be between 1 and 20."
+        )
+
+    runs = [
+        investigate_indicator(indicator, hops)
+        for _ in range(repetitions)
+    ]
+
+    timings = [
+        result["traversal_metrics"]["elapsed_ms"]
+        for result in runs
+    ]
+
+    last_result = runs[-1]
+
+    return {
+        "benchmark_type": "Live Neo4j investigation benchmark",
+        "indicator": indicator,
+        "hops": hops,
+        "repetitions": repetitions,
+        "found": last_result["found"],
+        "performance": {
+            "average_ms": round(statistics.mean(timings), 3),
+            "median_ms": round(statistics.median(timings), 3),
+            "minimum_ms": round(min(timings), 3),
+            "maximum_ms": round(max(timings), 3),
+            "standard_deviation_ms": round(
+                statistics.pstdev(timings), 3
+            )
+        },
+        "traversal": last_result["traversal_metrics"],
+        "nodes_returned": len(last_result["nodes"]),
+        "relationships_returned": len(
+            last_result["relationships"]
+        ),
+        "methodology_note": (
+            "Measurements include database query execution and "
+            "result processing. Results depend on database load, "
+            "cache state, hardware and graph size. Repeated runs "
+            "are measurements of the same indicator, not independent "
+            "investigations."
         )
     }
 

@@ -45,6 +45,7 @@ const graphStyle = [
   { selector: 'node[type = "ThreatTag"]', style: { 'background-color': '#d97706', 'border-color': '#fcd34d', 'width': 24, 'height': 24 } },
   { selector: 'node[type = "Malware"]', style: { 'background-color': '#db2777', 'border-color': '#f9a8d4' } },
   { selector: 'node[type = "ThreatActor"]', style: { 'background-color': '#64748b', 'border-color': '#cbd5e1' } },
+  { selector: 'node[type = "ThreatPulse"]', style: { 'background-color': '#0f766e', 'border-color': '#5eead4', 'width': 42, 'height': 42, 'shape': 'hexagon' } },
   {
     selector: 'edge',
     style: {
@@ -191,6 +192,7 @@ function MetricCard({ title, value, subtitle, icon: Icon, tone = 'teal' }) {
 function App() {
   const [activePage, setActivePage] = useState('Overview')
   const [summary, setSummary] = useState(null)
+  const [otxSummary, setOtxSummary] = useState(null)
   const [graph, setGraph] = useState(null)
   const [rankings, setRankings] = useState([])
   const [evaluation, setEvaluation] = useState(null)
@@ -211,7 +213,8 @@ function App() {
         api.get('/analytics/summary'),
         api.get('/graph'),
         api.get('/analytics/risk-ranking'),
-        api.get('/analytics/evaluation')
+        api.get('/analytics/evaluation'),
+        api.get('/analytics/otx-summary')
       ])
 
       if (results[0].status === 'fulfilled') setSummary(results[0].value.data)
@@ -220,6 +223,7 @@ function App() {
         setRankings(results[2].value.data.risk_rankings || [])
       }
       if (results[3].status === 'fulfilled') setEvaluation(results[3].value.data)
+      if (results[4].status === 'fulfilled') setOtxSummary(results[4].value.data)
 
       const failed = results.filter(result => result.status === 'rejected')
       if (failed.length) {
@@ -343,6 +347,24 @@ function App() {
                     <MetricCard title="High Risk URLs" value={highRisk} subtitle="Heuristic risk classification" icon={AlertTriangle} tone="red" />
                   </section>
 
+                  <section className="panel otx-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <h2>AlienVault OTX Intelligence</h2>
+                        <p>Threat pulses and indicators imported into the Neo4j graph</p>
+                      </div>
+                      <span className="graph-count">EXTERNAL THREAT SOURCE</span>
+                    </div>
+                    <div className="metric-grid">
+                      <MetricCard title="OTX Pulses" value={otxSummary?.pulses ?? '—'} subtitle="Imported threat reports" icon={Activity} />
+                      <MetricCard title="OTX Domains" value={otxSummary?.domains ?? '—'} subtitle="Domain indicators" icon={Globe} tone="purple" />
+                      <MetricCard title="OTX IP Addresses" value={otxSummary?.ips ?? '—'} subtitle="IP indicators" icon={Wifi} tone="blue" />
+                      <MetricCard title="OTX URLs" value={otxSummary?.urls ?? '—'} subtitle="URL indicators" icon={Bug} tone="red" />
+                    </div>
+                    <p className="disclaimer">
+                      {otxSummary?.indicators ?? 0} distinct indicators connected through {otxSummary?.relationships ?? 0} OTX evidence relationships.
+                    </p>
+                  </section>
                   <section className="content-grid">
                     <div className="panel graph-panel">
                       <div className="panel-heading">
@@ -366,6 +388,7 @@ function App() {
                         <span><i className="legend-dot ip" /> IP addresses</span>
                         <span><i className="legend-dot url" /> Malicious URLs</span>
                         <span><i className="legend-dot tag" /> Threat tags</span>
+                    <span><i className="legend-dot otx" /> OTX threat pulses</span>
                       </div>
                     </div>
 
@@ -419,6 +442,7 @@ function App() {
                     <span><i className="legend-dot ip" /> IP addresses</span>
                     <span><i className="legend-dot url" /> Malicious URLs</span>
                     <span><i className="legend-dot tag" /> Threat tags</span>
+                    <span><i className="legend-dot otx" /> OTX threat pulses</span>
                   </div>
                   {selectedNode && (
                     <div className="detail-panel">

@@ -1,9 +1,11 @@
+import requests
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from app.otx import collect_otx_intelligence, otx_is_configured
 from pydantic import BaseModel, Field
 
-from app.database import check_database_connection
+from app.database import check_database_connection, driver, DATABASE
 
 from app.graph_model import (
     create_graph_constraints,
@@ -13,7 +15,12 @@ from app.graph_model import (
 )
 
 from app.urlhaus import collect_urlhaus_intelligence
-from app.graph_analysis import get_graph_analysis, investigate_indicator, get_graph_topology
+from app.graph_analysis import (
+    get_graph_analysis,
+    investigate_indicator,
+    benchmark_investigation,
+    get_graph_topology
+)
 
 
 
@@ -36,7 +43,7 @@ class RelationshipRequest(BaseModel):
     source_type: Literal["domain", "ip", "malware", "threat_actor"]
     source_id: str
     relationship_type: Literal[
-        "RESOLVES_TO", "DISTRIBUTES", "ATTRIBUTED_TO"
+        "RESOLVES_TO", "DISTRIBUTES"
     ]
     target_type: Literal["domain", "ip", "malware", "threat_actor"]
     target_id: str
@@ -105,6 +112,8 @@ def add_entity(entity: EntityRequest):
             "entity": result
         }
 
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     except Exception:
         raise HTTPException(
             status_code=500,
@@ -269,6 +278,28 @@ def investigate(
         )
 
 
+
+@app.get("/analytics/investigation-benchmark")
+def investigation_benchmark(
+    indicator: str = Query(min_length=1, max_length=2000),
+    hops: int = Query(default=2, ge=1, le=3),
+    repetitions: int = Query(default=5, ge=1, le=20)
+):
+    try:
+        return benchmark_investigation(
+            indicator,
+            hops,
+            repetitions
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not benchmark the investigation."
+        )
+
+
 @app.get("/analytics/evaluation")
 def evaluation():
     try:
@@ -294,4 +325,86 @@ def graph_topology():
         raise HTTPException(
             status_code=500,
             detail="Could not perform graph topology analysis."
+        )
+
+
+@app.get("/otx/status")
+def otx_status():
+    return {
+        "source": "AlienVault OTX",
+        "configured": otx_is_configured()
+    }
+
+
+@app.post("/ingest/otx")
+def ingest_otx(limit: int = Query(default=5, ge=1, le=50)):
+    try:
+        return collect_otx_intelligence(limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"OTX ingestion failed: {str(exc)}"
+        )
+
+
+@app.get("/analytics/otx-summary")
+def otx_summary():
+    with driver.session(database=DATABASE) as session:
+        record = session.run("""
+            MATCH (p:ThreatPulse)
+            WITH count(p) AS pulses
+            OPTIONAL MATCH (p2:ThreatPulse)-[r:CONTAINS_INDICATOR]->(i)
+            RETURN
+                pulses,
+                count(DISTINCT r) AS relationships,
+                count(DISTINCT i) AS indicators,
+                count(DISTINCT CASE WHEN i:Domain THEN i END) AS domains,
+                count(DISTINCT CASE WHEN i:IP THEN i END) AS ips,
+                count(DISTINCT CASE WHEN i:MaliciousURL THEN i END) AS urls
+        """).single()
+
+    return dict(record) if record else {
+        "pulses": 0,
+        "relationships": 0,
+        "indicators": 0,
+        "domains": 0,
+        "ips": 0,
+        "urls": 0
+    }
+
+
+from app.mitre_attack import (
+    import_mitre_attack,
+    get_verified_threat_summary
+)
+
+
+@app.post("/ingest/mitre-attack")
+def ingest_mitre_attack():
+    try:
+        return import_mitre_attack()
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not download the official MITRE ATT&CK dataset."
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=str(error))
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="MITRE ATT&CK import failed. Check backend logs."
+        )
+
+
+@app.get("/analytics/verified-threats")
+def verified_threat_summary():
+    try:
+        return get_verified_threat_summary()
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not retrieve source-backed threat information."
         )
